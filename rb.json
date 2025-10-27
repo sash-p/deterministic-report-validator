@@ -40,13 +40,13 @@
     "edges":[
         {
             "id":"e001",
-            "condition":"field1<=fiekd2",
+            "condition":"field1<=field2",
             "fields":[["n002","n003"]]
         },
         {
             "id":"e002",
-            "condition":"field1 && field2",
-            "fields":[["n002"],["n003"]]
+            "condition":"field1 & field2",
+            "fields":[["n002","n003"]]
         }
     ]
 }

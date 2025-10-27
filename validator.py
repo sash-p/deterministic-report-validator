@@ -26,6 +26,7 @@ def identify_columns(df, rules):
     aliases_fields = {}
     # Stores default rule attributes (severity, nullable, distinct)
     default_checks = {}
+    column_mapping = {}
 
     # Loop through rule nodes (field definitions)
     for node in rules["nodes"]:
@@ -46,9 +47,9 @@ def identify_columns(df, rules):
     for col in df.columns:
         if col.lower() not in fields_to_check:
             if col.lower() in fields:
-                fields_to_check[col.lower()] = fields[col.lower()]
+                fields_to_check[col.lower()] = fields[col.lower()] #fields_to_check[col] = node_id
             elif col.lower() in aliases_fields:
-                fields_to_check[col.lower()] = aliases_fields[col.lower()]
+                fields_to_check[col.lower()] = aliases_fields[col.lower()] #fields_to_check[col] = node_id 
             else:
                 fields_not_found.append(col.lower())
         else:
@@ -96,14 +97,18 @@ def exec_valid(spark, file_path, rules_path, delimiter=",", format="", force=Fal
     cols_found, cols_notfound, field_def, col_checks = identify_columns(df, rules)
 
     # Apply column-based checks
+    col_checks_results = {}
+    print(col_checks)
     for chk_condition in col_checks:
-        for col_chks in col_checks[chk_condition]:
-            if len(col_chks) > 1:
-                print(cols_found[col_chks[0]], cols_found[col_chks[1]])
+        col_checks_results[chk_condition] = []
+        for field_in_chk_cond in col_checks[chk_condition]:
+            if len(field_in_chk_cond) > 1:
+                print(chk_condition.replace("field1", cols_found[field_in_chk_cond[0]]).replace("field2", cols_found[field_in_chk_cond[1]]))
+                col_checks_results[chk_condition].append(len(df[~df.eval(chk_condition.replace("field1", cols_found[field_in_chk_cond[0]]).replace("field2", cols_found[field_in_chk_cond[1]]))]))
             else:
-                print(cols_found[col_chks[0]])
+                print(cols_found[field_in_chk_cond[0]])
 
-
+    print(col_checks_results)
 def main(argv):
     # Validate syntax
     if len(argv) < 3:
