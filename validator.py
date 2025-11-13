@@ -27,29 +27,51 @@ def identify_columns(df, rules):
     # Stores default rule attributes (severity, nullable, distinct)
     default_checks = {}
     column_mapping = {}
+    default_datatype = {}
 
     # Loop through rule nodes (field definitions)
     for node in rules["nodes"]:
         if node["field"].lower() not in fields:
             fields[node["field"].lower()] = node["id"]
             default_checks[node["id"]] = [node["severity"], node["nullable"], node["distinct"]]
+            default_datatype[node["id"]] = node["dtype"]
 
         # Loop through aliases for each node and map them as well
         for alias in node["aliases"]:
             if alias.lower() not in aliases_fields:
                 aliases_fields[alias.lower()] = node["id"]
                 default_checks[node["id"]] = [node["severity"], node["nullable"], node["distinct"]]
+                default_datatype[node["id"]] = node["dtype"]
 
     fields_to_check = {}   # Maps actual dataframe columns to rule IDs
     fields_not_found = []  # Tracks columns in data not found in rules
 
     # Match dataframe columns to rule-defined fields or aliases
     for col in df.columns:
-        if col.lower() not in fields_to_check:
-            if col.lower() in fields:
-                fields_to_check[col.lower()] = fields[col.lower()] #fields_to_check[col] = node_id
-            elif col.lower() in aliases_fields:
-                fields_to_check[col.lower()] = aliases_fields[col.lower()] #fields_to_check[col] = node_id 
+        if col not in fields_to_check:
+            if col in fields:
+                fields_to_check[col] = fields[col] #fields_to_check[col] = node_id
+
+                if default_datatype[fields[col]] == "varchar":
+                    df[col] = df[col].astype(str)
+                elif default_datatype[fields[col]] == "date":   
+                    df[col] = df[col].astype('datetime64[ns]')
+                elif default_datatype[fields[col]] == "float":
+                    df[col] = df[col].astype(float)
+                elif default_datatype[fields[col]] == "int":
+                    df[col] = df[col].astype(int)
+
+            elif col in aliases_fields:
+                fields_to_check[col] = aliases_fields[col] #fields_to_check[col] = node_id 
+
+                if default_datatype[aliases_fields[col]] == "varchar":
+                    df[col] = df[col].astype(str)
+                elif default_datatype[aliases_fields[col]] == "date":   
+                    df[col] = df[col].astype('datetime64[ns]')
+                elif default_datatype[aliases_fields[col]] == "float":
+                    df[col] = df[col].astype(float)
+                elif default_datatype[aliases_fields[col]] == "int":
+                    df[col] = df[col].astype(int)
             else:
                 fields_not_found.append(col.lower())
         else:
@@ -86,28 +108,62 @@ def exec_valid(spark, file_path, rules_path, delimiter=",", format="", force=Fal
         df = spark.read.csv(file_path, sep=delimiter, header=True, inferSchema=True)
         # Clean column names
         for c in df.columns:
-            df = df.withColumnRenamed(c, c.strip())
+            df = df.withColumnRenamed(c, c.strip().lower())
     else:
-        df = pd.read_csv(file_path, sep=delimiter, low_memory=False)
-        df.columns = df.columns.str.strip()
-        df.columns = df.columns.str.replace(' ', '_')
+        df = pd.read_csv(file_path, sep=delimiter, low_memory=False, dtype=object)
+        df.columns = [col.strip().lower().replace(' ','_') for col in df.columns]
 
     # Load rule definitions and identify relevant columns
     rules = load_rules(rules_path)
     cols_found, cols_notfound, field_def, col_checks = identify_columns(df, rules)
 
     # Apply column-based checks
+    operators = ['+', '-', '*', '/', '%', '>', '<', '>=', '<=', '==', '!=']
     col_checks_results = {}
     print(col_checks)
     for chk_condition in col_checks:
         col_checks_results[chk_condition] = []
-        for field_in_chk_cond in col_checks[chk_condition]:
-            if len(field_in_chk_cond) > 1:
-                print(chk_condition.replace("field1", cols_found[field_in_chk_cond[0]]).replace("field2", cols_found[field_in_chk_cond[1]]))
-                col_checks_results[chk_condition].append(len(df[~df.eval(chk_condition.replace("field1", cols_found[field_in_chk_cond[0]]).replace("field2", cols_found[field_in_chk_cond[1]]))]))
-            else:
-                print(cols_found[field_in_chk_cond[0]])
 
+        for field_in_chk_cond in col_checks[chk_condition]:
+            condition_break=chk_condition.strip().split(' ')
+            conditional_eqn=" "
+
+            if len(field_in_chk_cond) > 1:
+                if len(condition_break) == 3:
+                    condition_break[0] = cols_found[field_in_chk_cond[0]]
+                    condition_break[2] = cols_found[field_in_chk_cond[1]]
+                    conditional_eqn = " ".join(condition_break)
+                else:
+                    print("Complex condition not supported yet.")
+                    continue
+            else:
+                for i in range(len(condition_break)):
+                    if i==0:
+                        condition_break[0] = cols_found[field_in_chk_cond[0]]
+                    else:
+                        if i%2==0:
+                            condition_break[i] = cols_found[field_in_chk_cond[i-1]]
+                        else:
+                            if i not in operators:
+                                conditional_eqn = conditional_eqn[:-2]
+                                i+=1
+                            else:
+                                conditional_eqn += condition_break[i]
+
+            if conditional_eqn != " ":
+                col_checks_results[chk_condition].append(len(df[~df.eval(conditional_eqn)]))
+
+        else:
+            op_flag = "N"
+            for op in range(len(operators)):
+                if condition_break[op] in operators:
+                    conditional_eqn=f"{cols_found[field_in_chk_cond[0]]} {chk_condition.replace('field1','').replace('len()','str.len()')}"
+                    n_conditional_eqn=f"not({conditional_eqn})"
+                    op_flag = "Y"
+                    
+            if op_flag == "Y":
+                col_checks_results[chk_condition].append(len(df.eval(n_conditional_eqn)))
+                
     print(col_checks_results)
 def main(argv):
     # Validate syntax
@@ -132,7 +188,7 @@ def main(argv):
 
     # Choose Spark if file is > 1GB, otherwise Pandas
     if ((os.path.getsize(file_name)/1024/1024) > 1000):
-        print("File size greater than 1BG, using Spark for processing.")
+        print("File size greater than 1GB, using Spark for processing.")
         print("Initializing Spark session ...")
         spark = SparkSession.builder.appName("Deterministic Report Validator").getOrCreate()
     else:
