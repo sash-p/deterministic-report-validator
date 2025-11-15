@@ -40,13 +40,23 @@
     "edges":[
         {
             "id":"e001",
-            "condition":"field1<=field2",
+            "condition":"field1 <= field2",
             "fields":[["n002","n003"]]
         },
         {
             "id":"e002",
-            "condition":"field1 & field2",
+            "condition":"field1 && field2",
             "fields":[["n002","n003"]]
+        },
+        {
+            "id":"e003",
+            "condition":"field1.len() == 10",
+            "fields":[["n001"]]
+        },
+        {
+            "id":"e004",
+            "condition":"field1 != 'STANDARD' && field2",
+            "fields":[["n001","n002"]]
         }
     ]
 }
