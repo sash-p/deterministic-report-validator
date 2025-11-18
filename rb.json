@@ -55,7 +55,7 @@
         },
         {
             "id":"e004",
-            "condition":"field1 != 'STANDARD' && field2",
+            "condition":"field1 not in ('STANDARD','') && field2",
             "fields":[["n001","n002"]]
         }
     ]

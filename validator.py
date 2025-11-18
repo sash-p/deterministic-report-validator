@@ -14,11 +14,10 @@ import json
 
 def load_rules(path):
     # Load validation rules from JSON file
-    print('Loading rule base....')
+    print('Loading rule base....\n')
     with open(path, "r") as f:
         return json.load(f)
-
-
+    
 def identify_columns(df, rules):
     # Maps field name → rule ID
     fields = {}
@@ -101,6 +100,26 @@ def identify_columns(df, rules):
 
     return fields_to_check_rev_map, fields_not_found, default_checks, conditional_checks
 
+def default_checks(df, cols_found, field_def):
+    print("Executing default checks ...")
+    def_checks_results = {}
+
+    for col,col_name in cols_found.items():
+        def_checks_results[col] = ['']
+
+        # Nullability check
+        if field_def[col][1] == False:
+            def_checks_results[col].append(len(df[df[col_name].isnull()]))
+        else:
+            def_checks_results[col].append(None)
+
+        # Distinctness check
+        if field_def[col][2] == True:
+            def_checks_results[col].append(len(df[col_name]) - len(df[col_name].drop_duplicates()))
+        else:
+            def_checks_results[col].append(None)
+
+    return def_checks_results
 
 def exec_valid(spark, file_path, rules_path, delimiter=",", format="", force=False):
     # Read data using Spark or Pandas depending on context
@@ -110,15 +129,21 @@ def exec_valid(spark, file_path, rules_path, delimiter=",", format="", force=Fal
         for c in df.columns:
             df = df.withColumnRenamed(c, c.strip().lower())
     else:
-        df = pd.read_csv(file_path, sep=delimiter, low_memory=False, dtype=object)
+        df = pd.read_csv(file_path, sep=delimiter, low_memory=False, dtype=object, on_bad_lines='error')
         df.columns = [col.strip().lower().replace(' ','_') for col in df.columns]
 
     # Load rule definitions and identify relevant columns
     rules = load_rules(rules_path)
     cols_found, cols_notfound, field_def, col_checks = identify_columns(df, rules)
 
+    #Default checks
+    def_checks = default_checks(df, cols_found, field_def)
+    print("Default Checks Results:")
+    print(def_checks,"\n")
+
     # Apply column-based checks
     operators = ['+', '-', '*', '/', '%', '>', '<', '>=', '<=', '==', '!=']
+    logical_operators = ['and', 'or', '&&', '||']
     col_checks_results = {}
     print(col_checks)
     for chk_condition in col_checks:
@@ -127,44 +152,55 @@ def exec_valid(spark, file_path, rules_path, delimiter=",", format="", force=Fal
         for field_in_chk_cond in col_checks[chk_condition]:
             condition_break=chk_condition.strip().split(' ')
             conditional_eqn=" "
-
-            if len(field_in_chk_cond) > 1:
-                if len(condition_break) == 3:
-                    condition_break[0] = cols_found[field_in_chk_cond[0]]
-                    condition_break[2] = cols_found[field_in_chk_cond[1]]
-                    conditional_eqn = " ".join(condition_break)
-                else:
-                    print("Complex condition not supported yet.")
-                    continue
-            else:
-                for i in range(len(condition_break)):
-                    if i==0:
-                        condition_break[0] = cols_found[field_in_chk_cond[0]]
-                    else:
-                        if i%2==0:
-                            condition_break[i] = cols_found[field_in_chk_cond[i-1]]
-                        else:
-                            if i not in operators:
-                                conditional_eqn = conditional_eqn[:-2]
-                                i+=1
-                            else:
-                                conditional_eqn += condition_break[i]
-
-            if conditional_eqn != " ":
-                col_checks_results[chk_condition].append(len(df[~df.eval(conditional_eqn)]))
-
-        else:
             op_flag = "N"
-            for op in range(len(operators)):
-                if condition_break[op] in operators:
-                    conditional_eqn=f"{cols_found[field_in_chk_cond[0]]} {chk_condition.replace('field1','').replace('len()','str.len()')}"
+
+            if len(field_in_chk_cond) ==2 and :
+                if len(condition_break) == 3:
+                    if condition_break[1] in operators:
+                        condition_break[0] = cols_found[field_in_chk_cond[0]]
+                        condition_break[2] = cols_found[field_in_chk_cond[1]]
+
+                    elif condition_break[1] in logical_operators:
+                        condition_break[0] = cols_found[field_in_chk_cond[0]]
+                        condition_break[1] = condition_break[1].replace('&&','and').replace('||','or')
+                        condition_break[2] = cols_found[field_in_chk_cond[1]]
+
+                        condition_break[0] = "(" + condition_break[0] + ".notna() and " + condition_break[0] + "!=' ')"
+                        condition_break[2] = "(" + condition_break[2] + ".notna() and " + condition_break[2] + "!=' ')"
+                        
+                    else:
+                        print("Complex condition not supported yet.", condition_break)
+                        continue
+
+                    conditional_eqn = f"{condition_break[0]} {condition_break[1]} {condition_break[2]}"
                     n_conditional_eqn=f"not({conditional_eqn})"
-                    op_flag = "Y"
-                    
-            if op_flag == "Y":
+
+                else:
+                    for i in range(len(condition_break)):
+                        if i==0:
+                            condition_break[0] = cols_found[field_in_chk_cond[0]]
+                        else:
+                            if i%2==0:
+                                condition_break[i] = cols_found[field_in_chk_cond[i-1]]
+                            else:
+                                if i not in operators:
+                                    conditional_eqn = conditional_eqn[:-2]
+                                    i+=1
+                                else:
+                                    conditional_eqn += condition_break[i]
+
+            else:
+                for op in range(len(condition_break)):
+                    if condition_break[op] in operators:
+                        conditional_eqn=f"{cols_found[field_in_chk_cond[0]]} {chk_condition.replace('field1','').replace('len()','str.len()')}"
+                        n_conditional_eqn=f"not({conditional_eqn})"
+                        op_flag = "Y"
+                        
+            if op_flag == "Y" or conditional_eqn != " ":
                 col_checks_results[chk_condition].append(len(df.eval(n_conditional_eqn)))
                 
     print(col_checks_results)
+
 def main(argv):
     # Validate syntax
     if len(argv) < 3:
